@@ -2,11 +2,12 @@
 import logging
 import os
 import re
+
 from parser import langchain_docs_extractor
 
 import weaviate
 from bs4 import BeautifulSoup, SoupStrainer
-from langchain.document_loaders import RecursiveUrlLoader, SitemapLoader
+from langchain.document_loaders import RecursiveUrlLoader, SitemapLoader, WebBaseLoader
 from langchain.indexes import SQLRecordManager
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.utils.html import (PREFIXES_TO_IGNORE_REGEX,
@@ -16,9 +17,12 @@ from langchain.vectorstores.weaviate import Weaviate
 from _index import index
 from chain import get_embeddings_model
 from constants import WEAVIATE_DOCS_INDEX_NAME
+from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 WEAVIATE_URL = os.environ["WEAVIATE_URL"]
 WEAVIATE_API_KEY = os.environ["WEAVIATE_API_KEY"]
@@ -97,16 +101,17 @@ def load_api_docs():
 
 
 def ingest_docs():
+    # docs_from_documentation = WebBaseLoader("https://python.langchain.com/cookbook").load()  # load_langchain_docs()
     docs_from_documentation = load_langchain_docs()
     logger.info(f"Loaded {len(docs_from_documentation)} docs from documentation")
-    docs_from_api = load_api_docs()
-    logger.info(f"Loaded {len(docs_from_api)} docs from API")
-    docs_from_langsmith = load_langsmith_docs()
-    logger.info(f"Loaded {len(docs_from_langsmith)} docs from Langsmith")
+    # docs_from_api = load_api_docs()
+    # logger.info(f"Loaded {len(docs_from_api)} docs from API")
+    # docs_from_langsmith = load_langsmith_docs()
+    # logger.info(f"Loaded {len(docs_from_langsmith)} docs from Langsmith")
 
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=200)
     docs_transformed = text_splitter.split_documents(
-        docs_from_documentation + docs_from_api + docs_from_langsmith
+        docs_from_documentation  # + docs_from_api + docs_from_langsmith
     )
 
     # We try to return 'source' and 'title' metadata when querying vector store and
@@ -120,9 +125,10 @@ def ingest_docs():
 
     client = weaviate.Client(
         url=WEAVIATE_URL,
-        auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
+        # auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
     )
     embedding = get_embeddings_model()
+
     vectorstore = Weaviate(
         client=client,
         index_name=WEAVIATE_DOCS_INDEX_NAME,
@@ -155,3 +161,15 @@ def ingest_docs():
 
 if __name__ == "__main__":
     ingest_docs()
+
+    client = weaviate.Client(
+        url=WEAVIATE_URL,
+        # auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
+    )
+
+    client.query.get()
+    #
+    # num_vecs = client.query.aggregate(WEAVIATE_DOCS_INDEX_NAME).with_meta_count().do()
+    # logger.info(
+    #     f"LangChain now has this many vectors: {num_vecs}",
+    # )

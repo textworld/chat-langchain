@@ -3,26 +3,33 @@ from operator import itemgetter
 from typing import Dict, List, Optional, Sequence
 
 import weaviate
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from langchain.chat_models import ChatOpenAI
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.embeddings.voyageai import VoyageEmbeddings
-from langchain.prompts import (ChatPromptTemplate, MessagesPlaceholder,
-                               PromptTemplate)
+# from langchain.prompts import (ChatPromptTemplate, MessagesPlaceholder,
+#                                PromptTemplate)
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain.schema import Document
 from langchain.schema.embeddings import Embeddings
 from langchain.schema.language_model import BaseLanguageModel
 from langchain.schema.messages import AIMessage, HumanMessage
-from langchain.schema.output_parser import StrOutputParser
+#from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser
+
+# from langchain.output_parsers import
 from langchain.schema.retriever import BaseRetriever
 from langchain.schema.runnable import (Runnable, RunnableBranch,
                                        RunnableLambda, RunnableMap)
 from langchain.vectorstores.weaviate import Weaviate
+from langchain_community.chat_models import QianfanChatEndpoint
 from langsmith import Client
 from pydantic import BaseModel
 
 from constants import WEAVIATE_DOCS_INDEX_NAME
+
+load_dotenv()
 
 RESPONSE_TEMPLATE = """\
 You are an expert programmer and problem-solver, tasked with answering any question \
@@ -66,8 +73,7 @@ Chat History:
 Follow Up Input: {question}
 Standalone Question:"""
 
-
-client = Client()
+# client = Client()
 
 app = FastAPI()
 app.add_middleware(
@@ -79,9 +85,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-
 WEAVIATE_URL = os.environ["WEAVIATE_URL"]
-WEAVIATE_API_KEY = os.environ["WEAVIATE_API_KEY"]
 
 
 class ChatRequest(BaseModel):
@@ -92,13 +96,12 @@ class ChatRequest(BaseModel):
 def get_embeddings_model() -> Embeddings:
     if os.environ.get("VOYAGE_API_KEY") and os.environ.get("VOYAGE_AI_MODEL"):
         return VoyageEmbeddings(model=os.environ["VOYAGE_AI_MODEL"])
-    return OpenAIEmbeddings(chunk_size=200)
+    return HuggingFaceEmbeddings(model_name=os.environ["EMBEDDING_MODEL_PATH"])
 
 
 def get_retriever() -> BaseRetriever:
     weaviate_client = weaviate.Client(
-        url=WEAVIATE_URL,
-        auth_client_secret=weaviate.AuthApiKey(api_key=WEAVIATE_API_KEY),
+        url=WEAVIATE_URL
     )
     weaviate_client = Weaviate(
         client=weaviate_client,
@@ -112,11 +115,11 @@ def get_retriever() -> BaseRetriever:
 
 
 def create_retriever_chain(
-    llm: BaseLanguageModel, retriever: BaseRetriever
+        llm: BaseLanguageModel, retriever: BaseRetriever
 ) -> Runnable:
     CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
     condense_question_chain = (
-        CONDENSE_QUESTION_PROMPT | llm | StrOutputParser()
+            CONDENSE_QUESTION_PROMPT | llm | StrOutputParser()
     ).with_config(
         run_name="CondenseQuestion",
     )
@@ -129,10 +132,10 @@ def create_retriever_chain(
             conversation_chain.with_config(run_name="RetrievalChainWithHistory"),
         ),
         (
-            RunnableLambda(itemgetter("question")).with_config(
-                run_name="Itemgetter:question"
-            )
-            | retriever
+                RunnableLambda(itemgetter("question")).with_config(
+                    run_name="Itemgetter:question"
+                )
+                | retriever
         ).with_config(run_name="RetrievalChainWithNoHistory"),
     ).with_config(run_name="RouteDependingOnChatHistory")
 
@@ -145,7 +148,7 @@ def format_docs(docs: Sequence[Document]) -> str:
     return "\n".join(formatted_docs)
 
 
-def serialize_history(request: ChatRequest):
+def serialize_history(request):
     chat_history = request["chat_history"] or []
     converted_chat_history = []
     for message in chat_history:
@@ -157,8 +160,8 @@ def serialize_history(request: ChatRequest):
 
 
 def create_chain(
-    llm: BaseLanguageModel,
-    retriever: BaseRetriever,
+        llm: BaseLanguageModel,
+        retriever: BaseRetriever,
 ) -> Runnable:
     retriever_chain = create_retriever_chain(
         llm,
@@ -183,26 +186,55 @@ def create_chain(
         run_name="GenerateResponse",
     )
     return (
-        {
-            "question": RunnableLambda(itemgetter("question")).with_config(
-                run_name="Itemgetter:question"
-            ),
-            "chat_history": RunnableLambda(serialize_history).with_config(
-                run_name="SerializeHistory"
-            ),
-        }
-        | _context
-        | response_synthesizer
+            {
+                "question": RunnableLambda(itemgetter("question")).with_config(
+                    run_name="Itemgetter:question"
+                ),
+                "chat_history": RunnableLambda(serialize_history).with_config(
+                    run_name="SerializeHistory"
+                ),
+            }
+            | _context
+            | response_synthesizer
     )
 
 
-llm = ChatOpenAI(
-    model="gpt-3.5-turbo-16k",
-    streaming=True,
-    temperature=0,
-)
+llm = QianfanChatEndpoint(streaming=True)
+
 retriever = get_retriever()
 answer_chain = create_chain(
     llm,
     retriever,
 )
+
+
+if __name__ == '__main__':
+    # prompt 成功案例
+    # CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
+    # condense_question_chain = (CONDENSE_QUESTION_PROMPT | llm | StrOutputParser())
+    # print(condense_question_chain.invoke({"question": "what is langchain", "chat_history": []}))
+
+
+    # 增加retriever
+    CONDENSE_QUESTION_PROMPT = PromptTemplate.from_template(REPHRASE_TEMPLATE)
+    condense_question_chain = (CONDENSE_QUESTION_PROMPT | llm | StrOutputParser())
+    conversation_chain = condense_question_chain | retriever
+    print(conversation_chain.invoke({"question": "what is langchain", "chat_history": []}))
+
+    # conversation_chain = condense_question_chain | retriever
+    #
+    # chain = RunnableBranch(
+    #     (
+    #         RunnableLambda(lambda x: bool(x.get("chat_history"))).with_config(
+    #             run_name="HasChatHistoryCheck"
+    #         ),
+    #         conversation_chain.with_config(run_name="RetrievalChainWithHistory"),
+    #     ),
+    #     (
+    #             RunnableLambda(itemgetter("question")).with_config(
+    #                 run_name="Itemgetter:question"
+    #             )
+    #             | retriever
+    #     ).with_config(run_name="RetrievalChainWithNoHistory"),
+    # ).with_config(run_name="RouteDependingOnChatHistory")
+    # print(chain.invoke({"question": "what is langchain", "chat_history": []}))
